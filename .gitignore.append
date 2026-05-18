@@ -1,12 +1,4 @@
-.gradle
-build
-.idea/
-.project
-.settings/
-.classpath
-nbactions.xml
-nb-configuration.xml
-nbproject/
+
 # Local RuneLite / RS State Bridge development secrets and generated state
 credentials.properties
 *.properties.local
