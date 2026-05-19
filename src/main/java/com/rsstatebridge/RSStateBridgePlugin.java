@@ -20,15 +20,20 @@ import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
+import net.runelite.api.Skill;
 import net.runelite.api.Tile;
+import net.runelite.api.TileItem;
 import net.runelite.api.TileObject;
 import net.runelite.api.WallObject;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -41,6 +46,12 @@ public class RSStateBridgePlugin extends Plugin
 {
     private static final int MAX_OBJECT_DISTANCE = 15;
     private static final int MAX_OBJECTS = 100;
+
+    private static final int MAX_NPC_DISTANCE = 15;
+    private static final int MAX_NPCS = 100;
+
+    private static final int MAX_GROUND_ITEM_DISTANCE = 15;
+    private static final int MAX_GROUND_ITEMS = 100;
 
     @Inject
     private Client client;
@@ -128,29 +139,112 @@ public class RSStateBridgePlugin extends Plugin
         camera.put("pitch", client.getCameraPitch());
         state.put("camera", camera);
 
+        Map<String, Object> status = new HashMap<>();
+        status.put("animation_id", player.getAnimation());
+        status.put("pose_animation", player.getPoseAnimation());
+        status.put("idle_pose_animation", player.getIdlePoseAnimation());
+        status.put("is_moving", player.getPoseAnimation() != player.getIdlePoseAnimation());
+        status.put("run_energy", client.getEnergy());
+        state.put("status", status);
+
         state.put("animation_id", player.getAnimation());
         state.put("pose_animation", player.getPoseAnimation());
         state.put("idle_pose_animation", player.getIdlePoseAnimation());
         state.put("is_moving", player.getPoseAnimation() != player.getIdlePoseAnimation());
 
-        state.put("inventory", getInventory());
+        state.put("widgets", getWidgetStates());
+        state.put("skills", getSkills());
+
+        state.put("inventory", getItemContainer(InventoryID.INVENTORY, true));
+        state.put("equipment", getItemContainer(InventoryID.EQUIPMENT, true));
+        state.put("bank", getItemContainer(InventoryID.BANK, false));
+
         state.put("nearby_objects", getNearbyObjects(playerWp));
+        state.put("nearby_npcs", getNearbyNpcs(playerWp));
+        state.put("ground_items", getGroundItems(playerWp));
 
         writeState(state);
     }
 
-    private List<Map<String, Object>> getInventory()
+    private Map<String, Object> getWidgetStates()
     {
-        List<Map<String, Object>> inventoryData = new ArrayList<>();
+        Map<String, Object> widgets = new HashMap<>();
 
-        ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+        widgets.put("bank_open", isWidgetVisible(WidgetInfo.BANK_CONTAINER));
+        widgets.put("inventory_open", isWidgetVisible(WidgetInfo.INVENTORY));
+        widgets.put("level_up_open", isWidgetVisible(WidgetInfo.LEVEL_UP_LEVEL));
 
-        if (inventory == null)
+        boolean npcDialogueOpen =
+                isWidgetVisible(WidgetInfo.DIALOG_NPC_TEXT);
+
+        boolean playerDialogueOpen =
+                isWidgetVisible(WidgetInfo.DIALOG_PLAYER_TEXT);
+
+        widgets.put(
+                "dialogue_open",
+                npcDialogueOpen || playerDialogueOpen
+        );
+
+        widgets.put("npc_dialogue_open", npcDialogueOpen);
+        widgets.put("player_dialogue_open", playerDialogueOpen);
+
+        // RuneLite versions differ on deposit box widget names.
+        // Safe fallback for now.
+        widgets.put("deposit_box_open", false);
+
+        return widgets;
+    }
+
+    private boolean isWidgetVisible(WidgetInfo widgetInfo)
+    {
+        try
         {
-            return inventoryData;
+            Widget widget = client.getWidget(widgetInfo);
+            return widget != null && !widget.isHidden();
+        }
+        catch (Exception ignored)
+        {
+            return false;
+        }
+    }
+
+    private Map<String, Object> getSkills()
+    {
+        Map<String, Object> skills = new HashMap<>();
+
+        for (Skill skill : Skill.values())
+        {
+            Map<String, Object> skillData = new HashMap<>();
+
+            try
+            {
+                skillData.put("level", client.getRealSkillLevel(skill));
+                skillData.put("boosted_level", client.getBoostedSkillLevel(skill));
+                skillData.put("xp", client.getSkillExperience(skill));
+            }
+            catch (Exception ignored)
+            {
+                continue;
+            }
+
+            skills.put(skill.getName().toLowerCase().replace(" ", "_"), skillData);
         }
 
-        Item[] items = inventory.getItems();
+        return skills;
+    }
+
+    private List<Map<String, Object>> getItemContainer(InventoryID inventoryID, boolean includeSlot)
+    {
+        List<Map<String, Object>> itemDataList = new ArrayList<>();
+
+        ItemContainer container = client.getItemContainer(inventoryID);
+
+        if (container == null)
+        {
+            return itemDataList;
+        }
+
+        Item[] items = container.getItems();
 
         for (int slot = 0; slot < items.length; slot++)
         {
@@ -169,32 +263,48 @@ public class RSStateBridgePlugin extends Plugin
             }
 
             int quantity = item.getQuantity();
-            String name = "unknown";
-
-            try
-            {
-                ItemComposition composition = client.getItemDefinition(id);
-
-                if (composition != null && composition.getName() != null)
-                {
-                    name = composition.getName();
-                }
-            }
-            catch (Exception ignored)
-            {
-                // Keep inventory export resilient.
-            }
+            String name = getItemName(id);
 
             Map<String, Object> itemData = new HashMap<>();
-            itemData.put("slot", slot + 1);
+
+            if (includeSlot)
+            {
+                itemData.put("slot", slot + 1);
+            }
+            else
+            {
+                itemData.put("index", slot);
+            }
+
             itemData.put("id", id);
             itemData.put("name", name);
             itemData.put("quantity", quantity);
 
-            inventoryData.add(itemData);
+            itemDataList.add(itemData);
         }
 
-        return inventoryData;
+        return itemDataList;
+    }
+
+    private String getItemName(int id)
+    {
+        String name = "unknown";
+
+        try
+        {
+            ItemComposition composition = client.getItemDefinition(id);
+
+            if (composition != null && composition.getName() != null)
+            {
+                name = composition.getName();
+            }
+        }
+        catch (Exception ignored)
+        {
+            // Keep item export resilient.
+        }
+
+        return name;
     }
 
     private List<Map<String, Object>> getNearbyObjects(WorldPoint playerWp)
@@ -326,6 +436,136 @@ public class RSStateBridgePlugin extends Plugin
         objectData.put("actions", actions);
 
         objects.add(objectData);
+    }
+
+    private List<Map<String, Object>> getNearbyNpcs(WorldPoint playerWp)
+    {
+        List<Map<String, Object>> npcs = new ArrayList<>();
+
+        try
+        {
+            for (NPC npc : client.getNpcs())
+            {
+                if (npc == null || npc.getWorldLocation() == null)
+                {
+                    continue;
+                }
+
+                WorldPoint npcWp = npc.getWorldLocation();
+                int distance = playerWp.distanceTo(npcWp);
+
+                if (distance > MAX_NPC_DISTANCE)
+                {
+                    continue;
+                }
+
+                NPCComposition composition = npc.getTransformedComposition();
+
+                if (composition == null || composition.getName() == null)
+                {
+                    continue;
+                }
+
+                Map<String, Object> npcData = new HashMap<>();
+                npcData.put("id", npc.getId());
+                npcData.put("name", composition.getName());
+                npcData.put("distance", distance);
+                npcData.put("x", npcWp.getX());
+                npcData.put("y", npcWp.getY());
+                npcData.put("plane", npcWp.getPlane());
+                npcData.put("animation", npc.getAnimation());
+                npcData.put("actions", composition.getActions());
+
+                npcs.add(npcData);
+
+                if (npcs.size() >= MAX_NPCS)
+                {
+                    return npcs;
+                }
+            }
+        }
+        catch (Exception ignored)
+        {
+            // Keep NPC export resilient.
+        }
+
+        return npcs;
+    }
+
+    private List<Map<String, Object>> getGroundItems(WorldPoint playerWp)
+    {
+        List<Map<String, Object>> groundItems = new ArrayList<>();
+
+        Scene scene = client.getScene();
+        Tile[][][] tiles = scene.getTiles();
+        int plane = client.getPlane();
+
+        if (plane < 0 || plane >= tiles.length)
+        {
+            return groundItems;
+        }
+
+        Tile[][] planeTiles = tiles[plane];
+
+        for (int x = 0; x < planeTiles.length; x++)
+        {
+            for (int y = 0; y < planeTiles[x].length; y++)
+            {
+                Tile tile = planeTiles[x][y];
+
+                if (tile == null || tile.getGroundItems() == null)
+                {
+                    continue;
+                }
+
+                WorldPoint tileWp = tile.getWorldLocation();
+
+                if (tileWp == null)
+                {
+                    continue;
+                }
+
+                int distance = playerWp.distanceTo(tileWp);
+
+                if (distance > MAX_GROUND_ITEM_DISTANCE)
+                {
+                    continue;
+                }
+
+                for (TileItem tileItem : tile.getGroundItems())
+                {
+                    if (tileItem == null)
+                    {
+                        continue;
+                    }
+
+                    int id = tileItem.getId();
+
+                    if (id <= 0)
+                    {
+                        continue;
+                    }
+
+                    Map<String, Object> groundItemData = new HashMap<>();
+                    groundItemData.put("id", id);
+                    groundItemData.put("name", getItemName(id));
+                    groundItemData.put("quantity", tileItem.getQuantity());
+                    groundItemData.put("distance", distance);
+                    groundItemData.put("x", tileWp.getX());
+                    groundItemData.put("y", tileWp.getY());
+                    groundItemData.put("plane", tileWp.getPlane());
+
+                    groundItems.add(groundItemData);
+
+                    if (groundItems.size() >= MAX_GROUND_ITEMS)
+                    {
+                        return groundItems;
+                    }
+                }
+            }
+        }
+
+        return groundItems;
     }
 
     private void writeState(Map<String, Object> state)
