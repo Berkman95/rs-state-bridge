@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.DecorativeObject;
 import net.runelite.api.GameObject;
@@ -140,12 +141,58 @@ public class RSStateBridgePlugin extends Plugin
         state.put("camera", camera);
 
         Map<String, Object> status = new HashMap<>();
+
+        status.put("hp", client.getBoostedSkillLevel(Skill.HITPOINTS));
+        status.put("hp_real", client.getRealSkillLevel(Skill.HITPOINTS));
+        status.put("prayer", client.getBoostedSkillLevel(Skill.PRAYER));
+        status.put("prayer_real", client.getRealSkillLevel(Skill.PRAYER));
         status.put("animation_id", player.getAnimation());
         status.put("pose_animation", player.getPoseAnimation());
         status.put("idle_pose_animation", player.getIdlePoseAnimation());
         status.put("is_moving", player.getPoseAnimation() != player.getIdlePoseAnimation());
         status.put("run_energy", client.getEnergy());
+        status.put("in_combat", player.getInteracting() != null);
+
         state.put("status", status);
+
+        Map<String, Object> combat = new HashMap<>();
+        Actor interacting = player.getInteracting();
+
+        if (interacting != null)
+        {
+            Map<String, Object> interactingData = new HashMap<>();
+
+            interactingData.put("name", interacting.getName());
+            interactingData.put("animation", interacting.getAnimation());
+
+            WorldPoint wp = interacting.getWorldLocation();
+
+            if (wp != null)
+            {
+                interactingData.put("x", wp.getX());
+                interactingData.put("y", wp.getY());
+                interactingData.put("plane", wp.getPlane());
+            }
+
+            if (interacting instanceof NPC)
+            {
+                NPC npc = (NPC) interacting;
+                interactingData.put("type", "npc");
+                interactingData.put("id", npc.getId());
+            }
+            else if (interacting instanceof Player)
+            {
+                interactingData.put("type", "player");
+            }
+            else
+            {
+                interactingData.put("type", "actor");
+            }
+
+            combat.put("interacting", interactingData);
+        }
+
+        state.put("combat", combat);
 
         state.put("animation_id", player.getAnimation());
         state.put("pose_animation", player.getPoseAnimation());
